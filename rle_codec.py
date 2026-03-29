@@ -1,51 +1,62 @@
 #!/usr/bin/env python3
-"""rle_codec - Run-length encoding and decoding."""
-import sys, argparse, json
+"""rle_codec: Run-length encoding/decoding."""
+import sys
 
 def encode(data):
     if not data: return []
-    runs = []
-    current, count = data[0], 1
-    for ch in data[1:]:
-        if ch == current:
+    result = []
+    count = 1
+    for i in range(1, len(data)):
+        if data[i] == data[i-1]:
             count += 1
         else:
-            runs.append((current, count))
-            current, count = ch, 1
-    runs.append((current, count))
-    return runs
+            result.append((data[i-1], count))
+            count = 1
+    result.append((data[-1], count))
+    return result
 
 def decode(runs):
-    return "".join(ch * count for ch, count in runs)
+    return "".join(c * n for c, n in runs)
 
-def to_string(runs):
-    return "".join(f"{ch}{count}" if count > 1 else ch for ch, count in runs)
+def encode_bytes(data: bytes) -> bytes:
+    if not data: return b""
+    result = bytearray()
+    i = 0
+    while i < len(data):
+        val = data[i]
+        count = 1
+        while i + count < len(data) and data[i+count] == val and count < 255:
+            count += 1
+        result.append(count)
+        result.append(val)
+        i += count
+    return bytes(result)
 
-def from_string(s):
-    runs, i = [], 0
-    while i < len(s):
-        ch = s[i]; i += 1
-        num = ""
-        while i < len(s) and s[i].isdigit():
-            num += s[i]; i += 1
-        runs.append((ch, int(num) if num else 1))
-    return runs
+def decode_bytes(data: bytes) -> bytes:
+    result = bytearray()
+    for i in range(0, len(data), 2):
+        count = data[i]
+        val = data[i+1]
+        result.extend([val] * count)
+    return bytes(result)
 
-def main():
-    p = argparse.ArgumentParser(description="RLE codec")
-    sub = p.add_subparsers(dest="cmd")
-    e = sub.add_parser("encode"); e.add_argument("text")
-    d = sub.add_parser("decode"); d.add_argument("encoded")
-    args = p.parse_args()
-    if args.cmd == "encode":
-        runs = encode(args.text)
-        encoded = to_string(runs)
-        ratio = len(encoded) / len(args.text) if args.text else 0
-        print(json.dumps({"input": args.text, "encoded": encoded, "runs": len(runs), "ratio": round(ratio, 3)}))
-    elif args.cmd == "decode":
-        runs = from_string(args.encoded)
-        decoded = decode(runs)
-        print(json.dumps({"encoded": args.encoded, "decoded": decoded, "length": len(decoded)}))
-    else: p.print_help()
+def test():
+    assert encode("aaabbbcc") == [("a",3),("b",3),("c",2)]
+    assert decode([("a",3),("b",3),("c",2)]) == "aaabbbcc"
+    assert encode("abc") == [("a",1),("b",1),("c",1)]
+    assert encode("") == []
+    assert decode([]) == ""
+    # Bytes
+    data = b"\x00\x00\x00\xff\xff\x42"
+    assert decode_bytes(encode_bytes(data)) == data
+    assert decode_bytes(encode_bytes(b"")) == b""
+    # Long run
+    long_data = "a" * 300
+    runs = encode(long_data)
+    assert runs == [("a", 300)]
+    assert decode(runs) == long_data
+    print("All tests passed!")
 
-if __name__ == "__main__": main()
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "test": test()
+    else: print("Usage: rle_codec.py test")
