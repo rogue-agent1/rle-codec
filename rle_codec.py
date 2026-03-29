@@ -1,45 +1,89 @@
 #!/usr/bin/env python3
-"""rle_codec - Run-length encoding/decoding."""
-import sys
+"""rle_codec - Run-length encoding variants."""
+import sys, argparse, json
 
-def encode(data):
-    if not data: return ""
-    result = []; count = 1
-    for i in range(1, len(data)):
-        if data[i] == data[i-1]: count += 1
-        else: result.append((data[i-1], count)); count = 1
-    result.append((data[-1], count))
-    return "".join(f"{c}{n}" if n > 1 else c for c, n in result)
+def rle_encode(data):
+    if not data: return []
+    runs = []; current = data[0]; count = 1
+    for c in data[1:]:
+        if c == current and count < 255: count += 1
+        else: runs.append((count, current)); current = c; count = 1
+    runs.append((count, current))
+    return runs
 
-def decode(data):
-    import re
-    result = []
-    for m in re.finditer(r"([^0-9])(\d*)", data):
-        c, n = m.group(1), m.group(2)
-        result.append(c * (int(n) if n else 1))
-    return "".join(result)
+def rle_decode(runs):
+    return "".join(c * n for n, c in runs)
 
-def encode_bytes(data):
-    if not data: return b""
-    result = bytearray(); i = 0
+def rle_encode_bytes(data):
+    encoded = []
+    for n, c in rle_encode(data):
+        encoded.extend([n, ord(c) if isinstance(c, str) else c])
+    return bytes(encoded)
+
+def packbits_encode(data):
+    """Apple PackBits-style encoding."""
+    result = []; i = 0; n = len(data)
+    while i < n:
+        # Check for run
+        run_len = 1
+        while i + run_len < n and run_len < 128 and data[i + run_len] == data[i]:
+            run_len += 1
+        if run_len >= 3:
+            result.append(257 - run_len); result.append(ord(data[i]) if isinstance(data[i], str) else data[i])
+            i += run_len
+        else:
+            # Literal run
+            lit_start = i
+            while i < n and i - lit_start < 128:
+                if i + 2 < n and data[i] == data[i+1] == data[i+2]: break
+                i += 1
+            lit_len = i - lit_start
+            if lit_len > 0:
+                result.append(lit_len - 1)
+                for j in range(lit_start, i):
+                    result.append(ord(data[j]) if isinstance(data[j], str) else data[j])
+    return bytes(result)
+
+def packbits_decode(data):
+    result = []; i = 0
     while i < len(data):
-        byte = data[i]; count = 1
-        while i + count < len(data) and data[i+count] == byte and count < 255: count += 1
-        result.extend([count, byte]); i += count
+        n = data[i]; i += 1
+        if n < 128:
+            count = n + 1
+            result.extend(data[i:i+count]); i += count
+        elif n > 128:
+            count = 257 - n
+            result.extend([data[i]] * count); i += 1
     return bytes(result)
 
-def decode_bytes(data):
-    result = bytearray()
-    for i in range(0, len(data), 2):
-        result.extend([data[i+1]] * data[i])
-    return bytes(result)
+def analyze(original, compressed):
+    orig_size = len(original)
+    comp_size = len(compressed)
+    return {"original": orig_size, "compressed": comp_size,
+            "ratio": round(comp_size/orig_size, 3) if orig_size else 0,
+            "savings": round((1-comp_size/orig_size)*100, 1) if orig_size else 0}
 
-if __name__ == "__main__":
-    if len(sys.argv) < 3: print("Usage: rle_codec.py <encode|decode> <text|file>"); sys.exit(1)
-    cmd = sys.argv[1]
-    if cmd == "encode": print(encode(sys.argv[2]))
-    elif cmd == "decode": print(decode(sys.argv[2]))
-    elif cmd == "encode-file":
-        data = open(sys.argv[2], "rb").read(); enc = encode_bytes(data)
-        out = sys.argv[3] if len(sys.argv) > 3 else sys.argv[2] + ".rle"
-        open(out, "wb").write(enc); print(f"{len(data)} → {len(enc)} ({len(enc)/len(data)*100:.1f}%)")
+def main():
+    p = argparse.ArgumentParser(description="Run-length encoding")
+    p.add_argument("--demo", action="store_true")
+    args = p.parse_args()
+    if args.demo:
+        tests = ["AAABBBCCDDDDDDEEEF", "ABCDEFG", "AAAAAAAAAAAA",
+                 "ABABABABABAB", "A"*100 + "B"*50 + "C"*25]
+        print("=== Basic RLE ===")
+        for text in tests:
+            runs = rle_encode(text)
+            decoded = rle_decode(runs)
+            ok = decoded == text
+            ratio = sum(2 for _ in runs) / len(text)
+            print(f"[{'OK' if ok else 'FAIL'}] \"{text[:30]}{'...' if len(text)>30 else ''}\" runs={len(runs)} ratio={ratio:.2f}")
+        print("\n=== PackBits ===")
+        for text in tests:
+            packed = packbits_encode(text)
+            unpacked = packbits_decode(packed)
+            decoded_str = "".join(chr(b) for b in unpacked)
+            ok = decoded_str == text
+            stats = analyze(text, packed)
+            print(f"[{'OK' if ok else 'FAIL'}] savings={stats['savings']}%")
+    else: p.print_help()
+if __name__ == "__main__": main()
